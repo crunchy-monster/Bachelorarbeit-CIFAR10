@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+
+# PyCharm
+.idea/
+
+# Data & models
+data/
+checkpoints/
+
+# Jupyter
+.ipynb_checkpoints/
