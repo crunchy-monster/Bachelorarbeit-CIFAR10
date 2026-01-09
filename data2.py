@@ -21,7 +21,7 @@ STD = (0.5, 0.5, 0.5)
 # https://arxiv.org/pdf/1804.07612 begründet
 def get_cifar10_loaders(
 		batch_size: int = 8,
-		root: str = "./data",
+		#root: str = "./data",
 		num_workers: int = 2,
 		download: bool = True,
 ):
@@ -36,14 +36,16 @@ def get_cifar10_loaders(
 
 	#batch_size = 8  # https://arxiv.org/pdf/1804.07612 begründet
 
+	cifar_root = os.path.join(DATA_DIR, "cifar10")
+
 	trainset = torchvision.datasets.CIFAR10(
-	    root=root, train=True, download=True, transform=transform)
+	    root=cifar_root, train=True, download=True, transform=transform)
 
 	trainloader = torch.utils.data.DataLoader(
 	    trainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
 
 	testset = torchvision.datasets.CIFAR10(
-	    root=root, train=False, download=True, transform=transform)
+	    root=cifar_root, train=False, download=True, transform=transform)
 
 	testloader = torch.utils.data.DataLoader(
 	    testset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
