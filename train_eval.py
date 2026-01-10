@@ -1,165 +1,204 @@
 import time
+import copy
 import torch
 import torch.nn.functional as F
+import json
+import csv
+from pathlib import Path
+from fgsm import fgsm_attack
+import matplotlib.pyplot as plt
 
-from config import BATCH_SIZE, LR, EPOCHS, WEIGHT_DECAY, SEED
 from data import get_cifar10_loaders
 
 def train_one_epoch(model, trainloader, optimizer, device):
     model.train()
-    running_loss = 0.0
+    loss_sum = 0.0
 
     for images, labels in trainloader:
         images = images.to(device)
         labels = labels.to(device)
 
-        outputs = model(images)
-        loss = F.cross_entropy(outputs, labels)
-
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
+        logits = model(images)
+        loss = F.cross_entropy(logits, labels)
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item()
+        loss_sum += loss.item()
 
-    return running_loss / len(trainloader)
-
+    return loss_sum / len(trainloader)
 
 
 @torch.no_grad()
-def evaluate(model, testloader, device):
+def eval_clean(model, loader, device):
     model.eval()
-    correct = 0
-    total = 0
-    loss_sum = 0.0
+    correct, total, loss_sum = 0, 0, 0.0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        logits = model(x)
+        loss_sum += F.cross_entropy(logits, y).item()
+        pred = logits.argmax(dim=1)
+        correct += (pred == y).sum().item()
+        total += y.size(0)
+    return loss_sum / len(loader), 100.0 * correct / total
 
-    for images, labels in testloader:
-        images = images.to(device)
-        labels = labels.to(device)
+def eval_fgsm(model, loader, device, epsilon):
+    model.eval()
+    correct, total, loss_sum = 0, 0, 0.0
 
-        outputs = model(images)
-        loss = F.cross_entropy(outputs, labels)
-        loss_sum += loss.item()
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
 
-        preds = outputs.argmax(dim=1)
-        total += labels.size(0)
-        correct += (preds == labels).sum().item()
+        # create adversarial batch
+        x_adv = fgsm_attack(model, x, y, epsilon)
 
-    acc = 100.0 * correct / total
-    return loss_sum / len(testloader), acc
+        with torch.no_grad():
+            logits = model(x_adv)
+            loss_sum += F.cross_entropy(logits, y).item()
+            pred = logits.argmax(dim=1)
+            correct += (pred == y).sum().item()
+            total += y.size(0)
 
-
-
-
+    return loss_sum / len(loader), 100.0 * correct / total
 def train_model(
     model,
-    trainloader,
-    testloader,
+    train_loader,
+    val_loader,
     device,
-    epochs,
-    lr,
-    weight_decay=0.0,
-    early_stopping=False,
+    epochs=200,
+    lr=1e-3,
+    weight_decay=1e-4,
+    early_stopping=True,
     patience=15,
-    monitor="test_loss",      # "test_loss" or "test_acc"
-    min_delta=0.0,            # minimal improvement to count as "better"
-    track_gpu_memory=True,    # records cuda peak mem if available
+    min_delta=1e-3,               # UNIVERSAL for val_loss
+    scheduler_factor=0.1,
+    scheduler_patience=5,
+    track_gpu_memory=True,
     verbose=True,
 ):
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=lr, weight_decay=weight_decay
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    # Reduce LR when val_loss plateaus
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=scheduler_factor, patience=scheduler_patience
     )
 
-    history = {"train_loss": [], "test_loss": [], "test_acc": [], "epoch_time_sec": []}
+    history = {
+        "train_loss": [], "val_loss": [], "val_acc": [],
+        "epoch_time_sec": [], "lr": []
+    }
 
-    use_cuda = (isinstance(device, torch.device) and device.type == "cuda") or (str(device).startswith("cuda"))
+    use_cuda = (device.type == "cuda")
     if track_gpu_memory and use_cuda:
         history["gpu_peak_mem_mb"] = []
 
-
-    # Early stopping bookkeeping
-    if monitor not in ("test_loss", "test_acc"):
-        raise ValueError("monitor must be 'test_loss' or 'test_acc'")
-
-    # For loss: lower is better. For acc: higher is better.
-    if monitor == "test_loss":
-        best_metric = float("inf")
-        is_better = lambda current, best: current < (best - min_delta)
-    else:
-        best_metric = -float("inf")
-        is_better = lambda current, best: current > (best + min_delta)
-
+    best_val_loss = float("inf")
     best_epoch = -1
-    best_state_dict = None
+    best_weights = None
     bad_epochs = 0
 
-    total_start = time.time()
-    gpu_peak_total = 0.0
-
     for epoch in range(epochs):
-        epoch_start = time.time()
-
+        start = time.time()
         if track_gpu_memory and use_cuda:
             torch.cuda.reset_peak_memory_stats()
 
-        train_loss = train_one_epoch(model, trainloader, optimizer, device)
-        test_loss, test_acc = evaluate(model, testloader, device)
+        train_loss = train_one_epoch(model, train_loader, optimizer, device)
+        val_loss, val_acc = eval_clean(model, val_loader, device)
 
-        epoch_time = time.time() - epoch_start
+        # scheduler step on val_loss
+        scheduler.step(val_loss)
+
+        epoch_time = time.time() - start
+        current_lr = optimizer.param_groups[0]["lr"]
 
         history["train_loss"].append(train_loss)
-        history["test_loss"].append(test_loss)
-        history["test_acc"].append(test_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
         history["epoch_time_sec"].append(epoch_time)
+        history["lr"].append(current_lr)
 
-        # GPU memory (peak allocated during epoch)
         if track_gpu_memory and use_cuda:
             peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
             history["gpu_peak_mem_mb"].append(peak_mb)
-            gpu_peak_total = max(gpu_peak_total, peak_mb)
 
-        # Print progress
         if verbose:
-            msg = (
-                f"Epoch {epoch + 1}/{epochs} | "
-                f"train_loss={train_loss:.4f} | "
-                f"test_loss={test_loss:.4f} | "
-                f"test_acc={test_acc:.2f}% | "
-                f"time={epoch_time:.2f}s"
-            )
+            msg = (f"Epoch {epoch+1}/{epochs} | "
+                   f"train_loss={train_loss:.4f} | "
+                   f"val_loss={val_loss:.4f} | val_acc={val_acc:.2f}% | "
+                   f"lr={current_lr:.2e} | time={epoch_time:.2f}s")
             if track_gpu_memory and use_cuda:
-                msg += f" | gpu_peak={history['gpu_peak_mem_mb'][-1]:.1f}MB"
+                msg += f" | gpu_peak={peak_mb:.1f}MB"
             print(msg)
 
-        # Early stopping check
-        current_metric = test_loss if monitor == "test_loss" else test_acc
-        if is_better(current_metric, best_metric):
-            best_metric = current_metric
+        # Early stopping on val_loss with min_delta
+        improved = val_loss < (best_val_loss - min_delta)
+        if improved:
+            best_val_loss = val_loss
             best_epoch = epoch
+            best_weights = copy.deepcopy(model.state_dict())
             bad_epochs = 0
-            # Keep best weights in memory (no file IO)
-            best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         else:
             bad_epochs += 1
 
         if early_stopping and bad_epochs >= patience:
             if verbose:
-                print(
-                    f"Early stopping at epoch {epoch + 1}. "
-                    f"Best {monitor}={best_metric:.4f} at epoch {best_epoch + 1}."
-                )
+                print(f"Early stopping at epoch {epoch+1}. "
+                      f"Best val_loss={best_val_loss:.4f} at epoch {best_epoch+1}.")
             break
 
-    total_time = time.time() - total_start
-    history["total_time_sec"] = total_time
+    # Restore best weights
+    if best_weights is not None:
+        model.load_state_dict(best_weights)
+
     history["best_epoch"] = best_epoch + 1 if best_epoch >= 0 else None
-    history["best_metric"] = best_metric
-    history["best_state_dict"] = best_state_dict  # optional use later
-
-    if track_gpu_memory and use_cuda:
-        history["gpu_peak_mem_mb_total"] = gpu_peak_total
-
+    history["best_val_loss"] = best_val_loss
     return history
+
+
+@torch.no_grad()
+def test_final(model, test_loader, device):
+    test_loss, test_acc = eval_clean(model, test_loader, device)
+    print(f"[FINAL TEST] loss={test_loss:.4f} | acc={test_acc:.2f}%")
+    return test_loss, test_acc
+
+def test_fgsm(model, test_loader, device, epsilon):
+    adv_loss, adv_acc = eval_fgsm(model, test_loader, device, epsilon)
+    print(
+        f"[FGSM TEST] eps={epsilon:.5f} | "
+        f"loss={adv_loss:.4f} | acc={adv_acc:.2f}%"
+    )
+    return adv_loss, adv_acc
+
+def save_history(history, out_dir, run_name="run"):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # JSON (kompletter dict, inkl. best_epoch etc.)
+    json_path = out_dir / f"{run_name}_history.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+
+    # CSV (epoch-wise keys)
+    csv_path = out_dir / f"{run_name}_history.csv"
+    rows = []
+    n = len(history["train_loss"])
+    for i in range(n):
+        rows.append({
+            "epoch": i + 1,
+            "train_loss": history["train_loss"][i],
+            "val_loss": history["val_loss"][i],
+            "val_acc": history["val_acc"][i],
+            "lr": history["lr"][i],
+            "epoch_time_sec": history["epoch_time_sec"][i],
+            **({"gpu_peak_mem_mb": history["gpu_peak_mem_mb"][i]} if "gpu_peak_mem_mb" in history else {})
+        })
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return str(json_path), str(csv_path)
 
 
 
