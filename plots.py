@@ -6,26 +6,6 @@ import torch.nn.functional as F
 import random
 
 
-def plot_history(history):
-    epochs = list(range(1, len(history["train_loss"]) + 1))
-
-    plt.figure()
-    plt.plot(epochs, history["train_loss"], label="train_loss")
-    plt.plot(epochs, history["val_loss"], label="val_loss")
-    plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend(); plt.grid(True)
-    plt.show()
-
-    plt.figure()
-    plt.plot(epochs, history["val_acc"], label="val_acc")
-    plt.xlabel("Epoch"); plt.ylabel("Accuracy (%)"); plt.legend(); plt.grid(True)
-    plt.show()
-
-    plt.figure()
-    plt.plot(epochs, history["lr"], label="lr")
-    plt.xlabel("Epoch"); plt.ylabel("Learning Rate"); plt.yscale("log")
-    plt.legend(); plt.grid(True)
-    plt.show()
-
 
 @torch.no_grad()
 def get_predictions(model, loader, device):
@@ -34,14 +14,14 @@ def get_predictions(model, loader, device):
     all_labels = []
     all_probs = []
 
-    for x, y in loader:
-        x = x.to(device)
-        logits = model(x)
+    for images, labels in loader:
+        images = images.to(device)
+        logits = model(images)
         probs = torch.softmax(logits, dim=1).cpu()
 
         preds = probs.argmax(dim=1)
         all_preds.append(preds)
-        all_labels.append(y)
+        all_labels.append(labels)
         all_probs.append(probs)
 
     return (
@@ -50,84 +30,135 @@ def get_predictions(model, loader, device):
         torch.cat(all_probs),
     )
 
-def plot_confusion_matrix(preds, labels, class_names):
+def plot_confusion_matrix(preds, labels, class_names, normalize=True):
     num_classes = len(class_names)
-    cm = torch.zeros((num_classes, num_classes), dtype=torch.int64)
+    cm = torch.zeros((num_classes, num_classes), dtype=torch.float32)
 
+    # --- Absolute Confusion Matrix --
     for t, p in zip(labels, preds):
         cm[t, p] += 1
 
-    plt.figure(figsize=(8, 8))
-    plt.imshow(cm, interpolation="nearest")
-    plt.title("Confusion Matrix")
-    plt.xticks(range(num_classes), class_names, rotation=45, ha="right")
-    plt.yticks(range(num_classes), class_names)
-    plt.colorbar()
-    plt.tight_layout()
+     # --- Normalize rows (true labels) ---
+    if normalize:
+        cm = cm / cm.sum(dim=1, keepdim=True)
+        cm = torch.nan_to_num(cm)  # falls eine Klasse nie vorkommt
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    im = ax.imshow(cm, interpolation="nearest", vmin=0.0, vmax=1.0)
+    ax.set_title("Confusion Matrix")
+
+    ax.xticks(range(num_classes), class_names, rotation=45, ha="right")
+    ax.yticks(range(num_classes), class_names)
+    ax.colorbar(im, ax=ax)
+    ax.tight_layout()
 
     # optional: Zahlen einblenden
     for i in range(num_classes):
         for j in range(num_classes):
-            plt.text(j, i, int(cm[i, j]), ha="center", va="center")
+            val = cm[i, j].item()
+            ax.text(j, i, int(cm[i, j]), ha="center", va="center", color="white" if val > 0.5 else "black")
 
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.show()
+    ax.xlabel("Predicted")
+    ax.ylabel("True")
+
+    return fig
 
 def plot_confidence_hist(probs, title="Confidence (max softmax)"):
+    # probs: Tensor (N, num_classes)
     conf = probs.max(dim=1).values.numpy()
-    plt.figure()
-    plt.hist(conf, bins=20)
-    plt.xlabel("Confidence");
-    plt.ylabel("Count");
-    plt.title(title)
-    plt.grid(True)
-    plt.show()
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(conf, bins=20, range=(0.0, 1.0))
+    ax.xlabel("Confidence (max softmax")
+    ax.ylabel("Count")
+    ax.title(title)
+    ax.grid(True)
+
+    return fig
 
 @torch.no_grad()
 def predict_probs(model, x):
-    logits = model(x)
+    logits = model(x)  # Probs für ein Batch berechnen
     return torch.softmax(logits, dim=1)
 
-def show_clean_vs_fgsm(model, loader, device, classes, epsilon=4 / 255, n=8):
+def show_clean_vs_fgsm(
+        model,
+        loader,
+        device,
+        classes,
+        epsilons=(1/255, 2/255, 4/255, 8/255),
+        n_per_eps=3,
+        title="FGSM Visual Comparison"
+):
     model.eval()
-    x, y = next(iter(loader))
-    x, y = x.to(device), y.to(device)
 
-    x = x[:n]
-    y = y[:n]
+    # --- Get one batch ---
+    images, labels = next(iter(loader))
+    images, labels = images.to(device), labels.to(device)
 
-    # predictions on clean
-    probs_clean = predict_probs(model, x)
-    pred_clean = probs_clean.argmax(dim=1)
-    conf_clean = probs_clean.max(dim=1).values
+    images = images[:n_per_eps]
+    labels = labels[:n_per_eps]
 
-    # adversarial
-    x_adv = fgsm_attack(model, x, y, epsilon)
-    probs_adv = predict_probs(model, x_adv)
-    pred_adv = probs_adv.argmax(dim=1)
-    conf_adv = probs_adv.max(dim=1).values
+    # --- Clean prediction ---
+    with torch.no_grad():
+        logits = model(images)
+        probs_clean = torch.softmax(logits, dim=1)
+        pred_clean = probs_clean.argmax(dim=1)
+        conf_clean = probs_clean.max(dim=1).values
 
-    # for plotting: denormalize
-    x_plot = denorm(x).clamp(0, 1).cpu()
-    x_adv_plot = denorm(x_adv).clamp(0, 1).cpu()
+    # --- Prepare plotting ---
+    fig = plt.figure(figsize=(14, 10))
+    fig.suptitle(title, fontsize=16)
 
-    plt.figure(figsize=(2 * n, 4))
-    for i in range(n):
-        # clean
-        plt.subplot(2, n, i + 1)
-        plt.imshow(x_plot[i].permute(1, 2, 0))
-        plt.axis("off")
-        plt.title(f"T:{classes[y[i]]}\nC:{classes[pred_clean[i]]} ({conf_clean[i]:.2f})")
+    outer = fig.add_gridspec(2, 2, wspace=0.15, hspace=0.25)
 
-        # adv
-        plt.subplot(2, n, n + i + 1)
-        plt.imshow(x_adv_plot[i].permute(1, 2, 0))
-        plt.axis("off")
-        plt.title(f"FGSM eps={epsilon:.4f}\nP:{classes[pred_adv[i]]} ({conf_adv[i]:.2f})")
+    # --- Loop over epsilons ---
+    for idx, eps in enumerate(epsilons):
+        row = idx // 2
+        col = idx % 2
 
-    plt.tight_layout()
-    plt.show()
+        inner = outer[row, col].subgridspec(2, n_per_eps, wspace=0.05, hspace=0.05)
+
+        # FGSM images
+        x_adv = fgsm_attack(model, images, labels, eps)
+
+        with torch.no_grad():
+            logits_adv = model(x_adv)
+            probs_adv = torch.softmax(logits_adv, dim=1)
+            pred_adv = probs_adv.argmax(dim=1)
+            conf_adv = probs_adv.max(dim=1).values
+
+        # Denormalize for plotting
+        x_clean_plot = denorm(images).clamp(0, 1).cpu()
+        x_adv_plot = denorm(x_adv).clamp(0, 1).cpu()
+
+        # Subplot title (epsilon)
+        ax_title = fig.add_subplot(outer[row, col])
+        ax_title.set_title(f"ε = {eps:.4f}", fontsize=12)
+        ax_title.axis("off")
+
+        # --- Plot images ---
+        for i in range(n_per_eps):
+            # Clean
+            ax = fig.add_subplot(inner[0, i])
+            ax.imshow(x_clean_plot[i].permute(1, 2, 0))
+            ax.axis("off")
+            ax.set_title(
+                f"T:{classes[labels[i]]}\n"
+                f"P:{classes[pred_clean[i]]} ({conf_clean[i]:.2f})",
+                fontsize=9,
+            )
+
+            # FGSM
+            ax = fig.add_subplot(inner[1, i])
+            ax.imshow(x_adv_plot[i].permute(1, 2, 0))
+            ax.axis("off")
+            ax.set_title(
+                f"P:{classes[pred_adv[i]]} ({conf_adv[i]:.2f})",
+                fontsize=9,
+            )
+
+    return fig
 
 
 def plot_training_curves(history, title="Training Curves"):
