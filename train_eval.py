@@ -161,10 +161,10 @@ def eval_fgsm(model, test_loader, device, epsilon):
 @torch.no_grad()
 def test_final(model, test_loader, device):
     test_loss, test_acc = eval_clean(model, test_loader, device)
-    print(f"[FINAL TEST] loss={test_loss:.4f} | acc={test_acc:.2f}%")
+    print(f"[CLEAN TEST] loss={test_loss:.4f} | acc={test_acc:.2f}%")
     return test_loss, test_acc
 
-@torch.no_grad()
+
 def test_fgsm(model, test_loader, device, epsilon):
     adv_loss, adv_acc = eval_fgsm(model, test_loader, device, epsilon)
     print(
