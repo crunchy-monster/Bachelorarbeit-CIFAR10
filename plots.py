@@ -45,6 +45,7 @@ def plot_confusion_matrix(preds, labels, class_names, normalize=True):
 
     fig, ax = plt.subplots(figsize=(8, 8))
     im = ax.imshow(cm, interpolation="nearest", vmin=0.0, vmax=1.0)
+
     ax.set_title("Confusion Matrix")
 
     ax.set_xticks(range(num_classes), class_names, rotation=45, ha="right")
@@ -57,7 +58,15 @@ def plot_confusion_matrix(preds, labels, class_names, normalize=True):
     for i in range(num_classes):
         for j in range(num_classes):
             val = cm[i, j].item()
-            ax.text(j, i, int(cm[i, j]), ha="center", va="center", color="white" if val > 0.5 else "black")
+            if normalize:
+                text = f"{val:.2f}"  # <<< WICHTIG
+            else:
+                text = str(int(val))
+            ax.text(
+                j, i, text,
+                ha="center", va="center",
+                color="white" if val > 0.5 else "black"
+            )
 
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
@@ -70,6 +79,7 @@ def plot_confidence_hist(probs, title="Confidence (max softmax)"):
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.hist(conf, bins=20, range=(0.0, 1.0))
+
     ax.set_xlabel("Confidence (max softmax")
     ax.set_ylabel("Count")
     ax.set_title(title)
