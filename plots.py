@@ -47,10 +47,11 @@ def plot_confusion_matrix(preds, labels, class_names, normalize=True):
     im = ax.imshow(cm, interpolation="nearest", vmin=0.0, vmax=1.0)
     ax.set_title("Confusion Matrix")
 
-    ax.xticks(range(num_classes), class_names, rotation=45, ha="right")
-    ax.yticks(range(num_classes), class_names)
-    ax.colorbar(im, ax=ax)
-    ax.tight_layout()
+    ax.set_xticks(range(num_classes), class_names, rotation=45, ha="right")
+    ax.set_yticks(range(num_classes), class_names)
+
+    fig.colorbar(im, ax=ax)
+    fig.tight_layout()
 
     # optional: Zahlen einblenden
     for i in range(num_classes):
@@ -58,8 +59,8 @@ def plot_confusion_matrix(preds, labels, class_names, normalize=True):
             val = cm[i, j].item()
             ax.text(j, i, int(cm[i, j]), ha="center", va="center", color="white" if val > 0.5 else "black")
 
-    ax.xlabel("Predicted")
-    ax.ylabel("True")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
 
     return fig
 
@@ -69,9 +70,9 @@ def plot_confidence_hist(probs, title="Confidence (max softmax)"):
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.hist(conf, bins=20, range=(0.0, 1.0))
-    ax.xlabel("Confidence (max softmax")
-    ax.ylabel("Count")
-    ax.title(title)
+    ax.set_xlabel("Confidence (max softmax")
+    ax.set_ylabel("Count")
+    ax.set_title(title)
     ax.grid(True)
 
     return fig
