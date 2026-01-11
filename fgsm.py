@@ -22,9 +22,11 @@ def fgsm_attack(model, x, y, epsilon):
     x_adv = x.detach().clone()
     x_adv.requires_grad_(True)
 
+    # Loss berechnen
     logits = model(x_adv)
     loss = F.cross_entropy(logits, y)
 
+    # Gradienten resetten und backward
     model.zero_grad(set_to_none=True)
     if x_adv.grad is not None:
         x_adv.grad.zero_()

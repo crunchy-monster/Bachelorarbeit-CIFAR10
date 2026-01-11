@@ -6,6 +6,7 @@ import json
 import csv
 from pathlib import Path
 from fgsm import fgsm_attack
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from data import get_cifar10_loaders
@@ -15,10 +16,10 @@ def train_one_epoch(model, trainloader, optimizer, device):
     loss_sum = 0.0
 
     for images, labels in trainloader:
-        images = images.to(device)
+        images = images.to(device) # Daten werden auf CPU/GPU geladen
         labels = labels.to(device)
 
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad(set_to_none=True) # Gradient wird gelöscht
         logits = model(images)
         loss = F.cross_entropy(logits, labels)
         loss.backward()
@@ -28,38 +29,6 @@ def train_one_epoch(model, trainloader, optimizer, device):
 
     return loss_sum / len(trainloader)
 
-
-@torch.no_grad()
-def eval_clean(model, loader, device):
-    model.eval()
-    correct, total, loss_sum = 0, 0, 0.0
-    for x, y in loader:
-        x, y = x.to(device), y.to(device)
-        logits = model(x)
-        loss_sum += F.cross_entropy(logits, y).item()
-        pred = logits.argmax(dim=1)
-        correct += (pred == y).sum().item()
-        total += y.size(0)
-    return loss_sum / len(loader), 100.0 * correct / total
-
-def eval_fgsm(model, loader, device, epsilon):
-    model.eval()
-    correct, total, loss_sum = 0, 0, 0.0
-
-    for x, y in loader:
-        x, y = x.to(device), y.to(device)
-
-        # create adversarial batch
-        x_adv = fgsm_attack(model, x, y, epsilon)
-
-        with torch.no_grad():
-            logits = model(x_adv)
-            loss_sum += F.cross_entropy(logits, y).item()
-            pred = logits.argmax(dim=1)
-            correct += (pred == y).sum().item()
-            total += y.size(0)
-
-    return loss_sum / len(loader), 100.0 * correct / total
 def train_model(
     model,
     train_loader,
@@ -70,7 +39,7 @@ def train_model(
     weight_decay=1e-4,
     early_stopping=True,
     patience=15,
-    min_delta=1e-3,               # UNIVERSAL for val_loss
+    min_delta=0,               # UNIVERSAL for val_loss
     scheduler_factor=0.1,
     scheduler_patience=5,
     track_gpu_memory=True,
@@ -78,7 +47,7 @@ def train_model(
 ):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    # Reduce LR when val_loss plateaus
+    # Reduce LR (Learning Rate) when val_loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=scheduler_factor, patience=scheduler_patience
     )
@@ -92,6 +61,7 @@ def train_model(
     if track_gpu_memory and use_cuda:
         history["gpu_peak_mem_mb"] = []
 
+    # Best-Model / Early stopping bookeeping
     best_val_loss = float("inf")
     best_epoch = -1
     best_weights = None
@@ -155,12 +125,46 @@ def train_model(
     return history
 
 
+
+@torch.no_grad()
+def eval_clean(model, test_loader, device):
+    model.eval()
+    correct, total, loss_sum = 0, 0, 0.0
+    for x, y in test_loader:
+        x, y = x.to(device), y.to(device)
+        logits = model(x)
+        loss_sum += F.cross_entropy(logits, y).item()
+        pred = logits.argmax(dim=1)
+        correct += (pred == y).sum().item()
+        total += y.size(0)
+    return loss_sum / len(test_loader), 100.0 * correct / total   # (loss, acc)
+
+def eval_fgsm(model, test_loader, device, epsilon):
+    model.eval()
+    correct, total, loss_sum = 0, 0, 0.0
+
+    for x, y in test_loader:
+        x, y = x.to(device), y.to(device)
+
+        # create adversarial batch
+        x_adv = fgsm_attack(model, x, y, epsilon)
+
+        with torch.no_grad():
+            logits = model(x_adv)
+            loss_sum += F.cross_entropy(logits, y).item()
+            pred = logits.argmax(dim=1)
+            correct += (pred == y).sum().item()
+            total += y.size(0)
+
+    return loss_sum / len(test_loader), 100.0 * correct / total
+
 @torch.no_grad()
 def test_final(model, test_loader, device):
     test_loss, test_acc = eval_clean(model, test_loader, device)
     print(f"[FINAL TEST] loss={test_loss:.4f} | acc={test_acc:.2f}%")
     return test_loss, test_acc
 
+@torch.no_grad()
 def test_fgsm(model, test_loader, device, epsilon):
     adv_loss, adv_acc = eval_fgsm(model, test_loader, device, epsilon)
     print(
@@ -202,3 +206,15 @@ def save_history(history, out_dir, run_name="run"):
 
 
 
+def load_history_csv(csv_path):
+    df = pd.read_csv(csv_path)
+    history = {
+        "train_loss": df["train_loss"].tolist(),
+        "val_loss": df["val_loss"].tolist(),
+        "val_acc": df["val_acc"].tolist(),
+        "lr": df["lr"].tolist(),
+    }
+    # optional keys
+    if "train_acc" in df.columns:
+        history["train_acc"] = df["train_acc"].tolist()
+    return history

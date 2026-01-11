@@ -13,8 +13,7 @@ from fgsm import denorm, fgsm_attack
 CLASSES = ('plane', 'car', 'bird', 'cat',
            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
-#MEAN = (0.5,0.5,0.5)
-#STD = (0.5, 0.5, 0.5)
+
 
 # Loading the dataset and preprocessing
 # https://docs.pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
@@ -73,7 +72,7 @@ def get_cifar10_loaders(
 
 
 
-def show_first_images(dataset, classes, n=25, mean=CIFAR10_MEAN, std=CIFAR10_STD):
+def show_first_images(dataset, classes, n=25, title="CIFAR10 - First Images", mean=CIFAR10_MEAN, std=CIFAR10_STD):
     # dataset[i] -> (C,H,W) tensor, label
     imgs = torch.stack([dataset[i][0] for i in range(n)])
     labels = [dataset[i][1] for i in range(n)]
@@ -86,29 +85,17 @@ def show_first_images(dataset, classes, n=25, mean=CIFAR10_MEAN, std=CIFAR10_STD
     imgs = imgs.clamp(0, 1)
 
     side = int(n ** 0.5)
-    plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(10, 10))
+
     for i in range(n):
         img = imgs[i].permute(1, 2, 0)  # HWC
         plt.subplot(side, side, i + 1)
         plt.xticks([]); plt.yticks([]); plt.grid(False)
         plt.imshow(img)
         plt.xlabel(classes[int(labels[i])])
-    plt.show()
+
+    plt.suptitle(title)
+    #plt.show()
+    return fig
 
 
-# def show_first_images(dataset, classes, n=25):
-#     images = torch.stack([dataset[i][0] for i in range(n)])
-#     labels = torch.tensor([dataset[i][1] for i in range(n)])
-#
-#     side = int(n ** 0.5)
-#     plt.figure(figsize=(10, 10))
-#     for i in range(n):
-# 	    img = images[i] * 0.5 + 0.5
-# 	    img = img.permute(1, 2, 0)
-# 	    plt.subplot(5, 5, i + 1)
-# 	    plt.xticks([])
-# 	    plt.yticks([])
-# 	    plt.grid(False)
-# 	    plt.imshow(img)
-# 	    plt.xlabel(classes[int(labels[i])])
-#     plt.show()
