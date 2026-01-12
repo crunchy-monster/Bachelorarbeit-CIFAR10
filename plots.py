@@ -5,23 +5,24 @@ import numpy as np
 import torch.nn.functional as F
 import random
 
-
-
-@torch.no_grad()
-def get_predictions(model, loader, device):
+def get_predictions(model, loader, device, attack=False, epsilon=None):
     model.eval()
-    all_preds = []
-    all_labels = []
-    all_probs = []
+    all_preds, all_labels, all_probs = [], [], []
 
     for images, labels in loader:
-        images = images.to(device)
-        logits = model(images)
-        probs = torch.softmax(logits, dim=1).cpu()
+        images, labels = images.to(device), labels.to(device)
+
+        if attack:
+            assert epsilon is not None, "epsilon must be set when attack=True"
+            images = fgsm_attack(model, images, labels, epsilon)
+
+        with torch.no_grad():
+            logits = model(images)
+            probs = torch.softmax(logits, dim=1).cpu()
 
         preds = probs.argmax(dim=1)
         all_preds.append(preds)
-        all_labels.append(labels)
+        all_labels.append(labels.cpu())
         all_probs.append(probs)
 
     return (
@@ -29,6 +30,30 @@ def get_predictions(model, loader, device):
         torch.cat(all_labels),
         torch.cat(all_probs),
     )
+
+
+# @torch.no_grad()
+# def get_predictions(model, loader, device):
+#     model.eval()
+#     all_preds = []
+#     all_labels = []
+#     all_probs = []
+#
+#     for images, labels in loader:
+#         images = images.to(device)
+#         logits = model(images)
+#         probs = torch.softmax(logits, dim=1).cpu()
+#
+#         preds = probs.argmax(dim=1)
+#         all_preds.append(preds)
+#         all_labels.append(labels)
+#         all_probs.append(probs)
+#
+#     return (
+#         torch.cat(all_preds),
+#         torch.cat(all_labels),
+#         torch.cat(all_probs),
+#     )
 
 def plot_confusion_matrix(preds, labels, class_names, normalize=True):
     num_classes = len(class_names)
