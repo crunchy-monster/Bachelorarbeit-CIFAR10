@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 import torch.nn.functional as F
 from data import get_cifar10_loaders
+import os
 
 def train_one_epoch(model, trainloader, optimizer, device, epoch=None, epochs=None):
     model.train()
@@ -42,15 +43,18 @@ def train_model(
     weight_decay=1e-4,
     early_stopping=True,
     patience=15,
-    min_delta=0,               # UNIVERSAL for val_loss
+    min_delta=0.0,               # tolerance for val_loss improvement
     scheduler_factor=0.1,
     scheduler_patience=5,
     track_gpu_memory=True,
     verbose=True,
+    # --- NEW: checkpointing/resume (optional) ---
+    ckpt_dir=None,
+    run_name="run",
+    resume=True,
 ):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    # Reduce LR (Learning Rate) when val_loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=scheduler_factor, patience=scheduler_patience
     )
@@ -60,25 +64,45 @@ def train_model(
         "epoch_time_sec": [], "lr": []
     }
 
-    use_cuda = (device.type == "cuda")
+    use_cuda = (isinstance(device, torch.device) and device.type == "cuda") or str(device).startswith("cuda")
     if track_gpu_memory and use_cuda:
         history["gpu_peak_mem_mb"] = []
 
-    # Best-Model / Early stopping bookeeping
+    # --- checkpoint paths ---
+    last_path = best_path = None
+    if ckpt_dir is not None:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        last_path = os.path.join(ckpt_dir, f"{run_name}_last.pt")
+        best_path = os.path.join(ckpt_dir, f"{run_name}_best.pt")
+
+    # --- early stopping bookkeeping ---
     best_val_loss = float("inf")
     best_epoch = -1
     best_weights = None
     bad_epochs = 0
 
-    for epoch in tqdm(range(epochs), desc="Epochs"):
+    # --- resume if possible ---
+    start_epoch = 0
+    if resume and last_path and os.path.exists(last_path):
+        last_epoch, best_val_loss_loaded, bad_epochs_loaded = load_checkpoint(
+            last_path, model, optimizer, scheduler, device=device
+        )
+        start_epoch = last_epoch + 1
+        best_val_loss = best_val_loss_loaded
+        bad_epochs = bad_epochs_loaded
+        if verbose:
+            print(f"[RESUME] {run_name}: epoch {start_epoch} | best_val_loss={best_val_loss:.4f} | bad_epochs={bad_epochs}")
+
+    # --- training loop ---
+    for epoch in tqdm(range(start_epoch, epochs), desc="Epochs"):
         start = time.time()
+
         if track_gpu_memory and use_cuda:
             torch.cuda.reset_peak_memory_stats()
 
         train_loss = train_one_epoch(model, train_loader, optimizer, device, epoch + 1, epochs)
         val_loss, val_acc = eval_clean(model, val_loader, device)
 
-        # scheduler step on val_loss
         scheduler.step(val_loss)
 
         epoch_time = time.time() - start
@@ -103,31 +127,37 @@ def train_model(
                 msg += f" | gpu_peak={peak_mb:.1f}MB"
             print(msg)
 
-        # Early stopping on val_loss with min_delta
+        # --- improvement check (val_loss) ---
         improved = val_loss < (best_val_loss - min_delta)
         if improved:
             best_val_loss = val_loss
             best_epoch = epoch
             best_weights = copy.deepcopy(model.state_dict())
             bad_epochs = 0
+
+            # save BEST checkpoint
+            if best_path:
+                save_checkpoint(best_path, model, optimizer, scheduler, epoch, best_val_loss, bad_epochs)
         else:
             bad_epochs += 1
 
+        # save LAST checkpoint every epoch
+        if last_path:
+            save_checkpoint(last_path, model, optimizer, scheduler, epoch, best_val_loss, bad_epochs)
+
+        # early stopping
         if early_stopping and bad_epochs >= patience:
             if verbose:
-                print(f"Early stopping at epoch {epoch+1}. "
-                      f"Best val_loss={best_val_loss:.4f} at epoch {best_epoch+1}.")
+                print(f"Early stopping at epoch {epoch+1}. Best val_loss={best_val_loss:.4f} at epoch {best_epoch+1}.")
             break
 
-    # Restore best weights
+    # restore best weights (so returned model is best by val_loss)
     if best_weights is not None:
         model.load_state_dict(best_weights)
 
     history["best_epoch"] = best_epoch + 1 if best_epoch >= 0 else None
     history["best_val_loss"] = best_val_loss
     return history
-
-
 
 @torch.no_grad()
 def eval_clean(model, test_loader, device):
@@ -219,3 +249,26 @@ def load_history_csv(csv_path):
     if "train_acc" in df.columns:
         history["train_acc"] = df["train_acc"].tolist()
     return history
+
+def save_checkpoint(path, model, optimizer, scheduler, epoch, best_val_loss, bad_epochs):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+        "epoch": epoch,
+        "model_state": model.state_dict(),
+        "opt_state": optimizer.state_dict(),
+        "sched_state": scheduler.state_dict() if scheduler is not None else None,
+        "best_val_loss": best_val_loss,
+        "bad_epochs": bad_epochs,
+    }, path)
+
+def load_checkpoint(path, model, optimizer=None, scheduler=None, device="cpu"):
+    ckpt = torch.load(path, map_location=device)
+    model.load_state_dict(ckpt["model_state"])
+    if optimizer is not None and ckpt.get("opt_state") is not None:
+        optimizer.load_state_dict(ckpt["opt_state"])
+    if scheduler is not None and ckpt.get("sched_state") is not None:
+        scheduler.load_state_dict(ckpt["sched_state"])
+    epoch = ckpt.get("epoch", -1)
+    best_val_loss = ckpt.get("best_val_loss", float("inf"))
+    bad_epochs = ckpt.get("bad_epochs", 0)
+    return epoch, best_val_loss, bad_epochs
