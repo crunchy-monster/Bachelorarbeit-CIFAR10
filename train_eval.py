@@ -8,7 +8,8 @@ from pathlib import Path
 from fgsm import fgsm_attack
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from tqdm.auto import tqdm
+import torch.nn.functional as F
 from data import get_cifar10_loaders
 
 def train_one_epoch(model, trainloader, optimizer, device):
