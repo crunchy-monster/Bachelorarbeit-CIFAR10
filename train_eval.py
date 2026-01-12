@@ -12,21 +12,23 @@ from tqdm.auto import tqdm
 import torch.nn.functional as F
 from data import get_cifar10_loaders
 
-def train_one_epoch(model, trainloader, optimizer, device):
+def train_one_epoch(model, trainloader, optimizer, device, epoch=None, epochs=None):
     model.train()
     loss_sum = 0.0
 
-    for images, labels in trainloader:
-        images = images.to(device) # Daten werden auf CPU/GPU geladen
+    pbar = tqdm(trainloader, desc=f"Train {epoch}/{epochs}" if epoch else "Train", leave=False)
+    for images, labels in pbar:
+        images = images.to(device)
         labels = labels.to(device)
 
-        optimizer.zero_grad(set_to_none=True) # Gradient wird gelöscht
+        optimizer.zero_grad(set_to_none=True)
         logits = model(images)
         loss = F.cross_entropy(logits, labels)
         loss.backward()
         optimizer.step()
 
         loss_sum += loss.item()
+        pbar.set_postfix(loss=f"{loss.item():.3f}")
 
     return loss_sum / len(trainloader)
 
@@ -68,12 +70,12 @@ def train_model(
     best_weights = None
     bad_epochs = 0
 
-    for epoch in range(epochs):
+    for epoch in tqdm(range(epochs), desc="Epochs"):
         start = time.time()
         if track_gpu_memory and use_cuda:
             torch.cuda.reset_peak_memory_stats()
 
-        train_loss = train_one_epoch(model, train_loader, optimizer, device)
+        train_loss = train_one_epoch(model, train_loader, optimizer, device, epoch + 1, epochs)
         val_loss, val_acc = eval_clean(model, val_loader, device)
 
         # scheduler step on val_loss
