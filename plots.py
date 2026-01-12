@@ -55,7 +55,7 @@ def get_predictions(model, loader, device, attack=False, epsilon=None):
 #         torch.cat(all_probs),
 #     )
 
-def plot_confusion_matrix(preds, labels, class_names, normalize=True):
+def plot_confusion_matrix(preds, labels, class_names, normalize=True, title="Confusion Matrix"):
     num_classes = len(class_names)
     cm = torch.zeros((num_classes, num_classes), dtype=torch.float32)
 
@@ -71,7 +71,7 @@ def plot_confusion_matrix(preds, labels, class_names, normalize=True):
     fig, ax = plt.subplots(figsize=(8, 8))
     im = ax.imshow(cm, interpolation="nearest", vmin=0.0, vmax=1.0)
 
-    ax.set_title("Confusion Matrix")
+    ax.set_title(title)
 
     ax.set_xticks(range(num_classes), class_names, rotation=45, ha="right")
     ax.set_yticks(range(num_classes), class_names)
@@ -226,6 +226,7 @@ def fgsm_single_image_demo(
     class_names,
     epsilons=(1/255, 2/255, 4/255, 8/255),
     idx=None,
+    title=None
 ):
     model.eval()
 
@@ -291,8 +292,11 @@ def fgsm_single_image_demo(
             f"ε={eps:.4f}\nPred: {class_names[pred]} ({conf*100:.1f}%)"
         )
 
+    if title is not None:
+        fig.suptitle(title, fontsize=14)
+
     plt.tight_layout()
-    plt.show()
+    return fig
 
 
 import matplotlib.pyplot as plt

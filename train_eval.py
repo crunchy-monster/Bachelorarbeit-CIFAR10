@@ -167,10 +167,8 @@ def test_final(model, test_loader, device):
 
 def test_fgsm(model, test_loader, device, epsilon):
     adv_loss, adv_acc = eval_fgsm(model, test_loader, device, epsilon)
-    print(
-        f"[FGSM TEST] eps={epsilon:.5f} | "
-        f"loss={adv_loss:.4f} | acc={adv_acc:.2f}%"
-    )
+    #print(f"[FGSM TEST] eps={epsilon:.5f} | "f"loss={adv_loss:.4f} | acc={adv_acc:.2f}%")
+
     return adv_loss, adv_acc
 
 def save_history(history, out_dir, run_name="run"):
