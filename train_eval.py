@@ -48,10 +48,11 @@ def train_model(
     scheduler_patience=5,
     track_gpu_memory=True,
     verbose=True,
-    # --- NEW: checkpointing/resume (optional) ---
     ckpt_dir=None,
     run_name="run",
     resume=True,
+    log_csv_path=None,
+    log_json_path=None
 ):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -126,6 +127,26 @@ def train_model(
             if track_gpu_memory and use_cuda:
                 msg += f" | gpu_peak={peak_mb:.1f}MB"
             print(msg)
+
+        # =========================
+        # DURABLE LOGGING (CSV/JSON)
+        # =========================
+        row = {
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "lr": current_lr,
+            "epoch_time_sec": epoch_time,
+        }
+        if track_gpu_memory and use_cuda:
+            row["gpu_peak_mem_mb"] = peak_mb
+
+        if log_csv_path:
+            append_epoch_log(log_csv_path, row)
+
+        if log_json_path:
+            write_json_atomic(log_json_path, history)
 
         # --- improvement check (val_loss) ---
         improved = val_loss < (best_val_loss - min_delta)
@@ -272,3 +293,25 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None, device="cpu"):
     best_val_loss = ckpt.get("best_val_loss", float("inf"))
     bad_epochs = ckpt.get("bad_epochs", 0)
     return epoch, best_val_loss, bad_epochs
+
+def append_epoch_log(csv_path, row: dict):
+    """Hängt pro Epoche eine Zeile an (robust für Drive)."""
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+        f.flush()
+        os.fsync(f.fileno())  # wichtig: wirklich auf Disk schreiben
+
+def write_json_atomic(path, obj):
+    """Schreibt JSON atomar (tmp + rename), um Teilwrites zu vermeiden."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
